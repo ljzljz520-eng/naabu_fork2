@@ -79,8 +79,8 @@ type Options struct {
 	ProxyAuth         string              // Socks5 proxy authentication (username:password)
 	Resolvers         string              // Resolvers (comma separated or file)
 	baseResolvers     []string
-	DnsOrder          string              // DNS resolution order (p/l/lp/pl)
-	SystemResolver    bool                // Use system DNS resolver as fallback
+	DnsOrder          string          // DNS resolution order (p/l/lp/pl)
+	SystemResolver    bool            // Use system DNS resolver as fallback
 	OnResult          result.ResultFn // callback on final host result
 	OnReceive         result.ResultFn // callback on response receive
 	CSV               bool
@@ -143,6 +143,10 @@ type Options struct {
 	// PredictionThreshold is the minimum confidence percentage (0–100) to
 	// act on a port prediction (default 20, meaning 20%).
 	PredictionThreshold int
+	// Adaptive enables the self-tuning controller: it measures loss and
+	// RTT during the scan and dynamically adjusts rate/timeout/retries,
+	// printing diagnostics at the end. No packet evasion is involved.
+	Adaptive bool
 }
 
 // ParseOptions parses the command line flags provided by a user
@@ -244,6 +248,7 @@ func ParseOptions() *Options {
 		flagSet.BoolVar(&options.Verify, "verify", false, "validate the ports again with TCP verification"),
 		flagSet.BoolVarP(&options.SmartScan, "smart-scan", "ss", false, "predictive port scanning using port correlation model"),
 		flagSet.IntVarP(&options.PredictionThreshold, "prediction-threshold", "pt", 20, "minimum confidence for port predictions (0-100%)"),
+		flagSet.BoolVarP(&options.Adaptive, "adaptive", "ad", false, "adaptive mode: auto-tune rate/timeout/retries from live loss & RTT and print network diagnostics"),
 	)
 
 	flagSet.CreateGroup("debug", "Debug",

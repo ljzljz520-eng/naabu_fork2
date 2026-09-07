@@ -23,7 +23,6 @@ type SYNSender struct {
 	batch   *rawsend.Batch
 	srcPort uint16
 	baseSum uint32
-	seq     uint32
 	pkt     [24]byte
 }
 
@@ -94,8 +93,10 @@ func newSYNSender(handler *scan.ListenHandler) (*SYNSender, error) {
 }
 
 func (s *SYNSender) send(dstIP [4]byte, dstPort uint16) error {
-	s.seq++
-	seq := s.seq
+	// Draw the sequence number from the shared scan sequencer (instead of
+	// a private counter) so the adaptive tuner can match this SYN to the
+	// returning SYN-ACK and measure RTT.
+	seq := scan.NextSeq()
 
 	binary.BigEndian.PutUint16(s.pkt[2:4], dstPort)
 	binary.BigEndian.PutUint32(s.pkt[4:8], seq)
@@ -110,10 +111,18 @@ func (s *SYNSender) send(dstIP [4]byte, dstPort uint16) error {
 	sum += sum >> 16
 	binary.BigEndian.PutUint16(s.pkt[16:18], ^uint16(sum))
 
+	var err error
 	if s.batch != nil {
-		return s.batch.Add(s.pkt[:], dstIP)
+		err = s.batch.Add(s.pkt[:], dstIP)
+	} else {
+		err = s.sender.SendTo(s.pkt[:], dstIP)
 	}
-	return s.sender.SendTo(s.pkt[:], dstIP)
+	if err != nil {
+		scan.RecordSendFailure()
+	} else {
+		scan.RecordSynSent(seq)
+	}
+	return err
 }
 
 func (s *SYNSender) flush() error {

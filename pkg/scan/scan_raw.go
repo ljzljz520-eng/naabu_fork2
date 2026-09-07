@@ -231,7 +231,7 @@ func sendAsyncTCP4(listenHandler *ListenHandler, ip string, p *port.Port, pkgFla
 		SrcPort: layers.TCPPort(listenHandler.Port),
 		DstPort: layers.TCPPort(p.Port),
 		Window:  1024,
-		Seq:     tcpsequencer.Next(),
+		Seq:     NextSeq(),
 		Options: []layers.TCPOption{tcpOption},
 	}
 
@@ -260,6 +260,9 @@ func sendAsyncTCP4(listenHandler *ListenHandler, ip string, p *port.Port, pkgFla
 
 	if err != nil {
 		gologger.Debug().Msgf("Can not send packet to %s:%d port: %s\n", ip, p.Port, err)
+		RecordSendFailure()
+	} else if pkgFlag == Syn {
+		RecordSynSent(tcp.Seq)
 	}
 }
 
@@ -341,7 +344,7 @@ func sendAsyncTCP6(listenHandler *ListenHandler, ip string, p *port.Port, pkgFla
 		SrcPort: layers.TCPPort(listenHandler.Port),
 		DstPort: layers.TCPPort(p.Port),
 		Window:  1024,
-		Seq:     tcpsequencer.Next(),
+		Seq:     NextSeq(),
 		Options: []layers.TCPOption{tcpOption},
 	}
 
@@ -364,6 +367,9 @@ func sendAsyncTCP6(listenHandler *ListenHandler, ip string, p *port.Port, pkgFla
 		err = sendWithConn(ip, listenHandler.TcpConn6, &tcp)
 		if err != nil {
 			gologger.Debug().Msgf("Can not send packet to %s:%d port: %s\n", ip, p.Port, err)
+			RecordSendFailure()
+		} else if pkgFlag == Syn {
+			RecordSynSent(tcp.Seq)
 		}
 	}
 }
@@ -651,7 +657,10 @@ func TransportReadWorker() {
 				}
 				listenHandler.HostDiscoveryChan <- &PkgResult{ipv4: srcIP4, ipv6: srcIP6, port: &port.Port{Port: int(tcp.SrcPort), Protocol: proto}}
 			case tcpPortMatches && tcp.SYN && tcp.ACK:
+				RecordSynAck(tcp.Ack)
 				listenHandler.TcpChan <- &PkgResult{ipv4: srcIP4, ipv6: srcIP6, port: &port.Port{Port: int(tcp.SrcPort), Protocol: protocol.TCP}}
+			case tcpPortMatches && tcp.RST:
+				RecordRst()
 			case udpPortMatches && udp.Length > 0: // needs a better matching of udp payloads
 				listenHandler.UdpChan <- &PkgResult{ipv4: srcIP4, ipv6: srcIP6, port: &port.Port{Port: int(udp.SrcPort), Protocol: protocol.UDP}}
 			}
@@ -941,7 +950,7 @@ func ACKPort(listenHandler *ListenHandler, dstIP string, port int, timeout time.
 		DstPort: layers.TCPPort(port),
 		ACK:     true,
 		Window:  1024,
-		Seq:     tcpsequencer.Next(),
+		Seq:     NextSeq(),
 		Options: []layers.TCPOption{tcpOption},
 	}
 

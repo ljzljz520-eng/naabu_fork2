@@ -86,9 +86,10 @@ func (r *Runner) runPredictiveScan(ctx context.Context, targets []*net.IPNet, ta
 	// IP permutation even when ports are dequeued in rapid succession.
 	var brSeed int64
 
-	timeout := r.options.GetTimeout()
-
-	for retry := 0; retry < r.options.Retries; retry++ {
+	for retry := 0; retry < r.adaptiveRetries(); retry++ {
+		if r.tuner != nil {
+			r.tuner.RoundStart(retry)
+		}
 		knownOpen := r.collectOpenPorts()
 		pq := newPortQueue(r.scanner.Ports, model, knownOpen)
 		queuePtr.Store(pq)
@@ -116,10 +117,14 @@ func (r *Runner) runPredictiveScan(ctx context.Context, targets []*net.IPNet, ta
 			r.wgscan.Wait()
 		}
 
+		if r.tuner != nil {
+			r.tuner.RoundEnd(retry)
+		}
+
 		// Wait for in-flight SYN responses before the next retry
 		// so the retry can skip IPs that responded.
-		if shouldUseRawPackets && retry < r.options.Retries-1 {
-			time.Sleep(timeout)
+		if shouldUseRawPackets && retry < r.adaptiveRetries()-1 {
+			time.Sleep(r.adaptiveTimeout())
 		}
 	}
 
@@ -129,7 +134,7 @@ func (r *Runner) runPredictiveScan(ctx context.Context, targets []*net.IPNet, ta
 
 	// Let last in-flight SYN packets get responses.
 	if shouldUseRawPackets {
-		time.Sleep(timeout)
+		time.Sleep(r.adaptiveTimeout())
 	}
 
 	r.scanTargetsWithPort(ctx, targetsWithPort, shouldUseRawPackets)

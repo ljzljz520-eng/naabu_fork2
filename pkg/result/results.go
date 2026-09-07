@@ -206,6 +206,20 @@ func (r *Result) GetOpenPortNumbers() []int {
 	return out
 }
 
+// GetOpenPortTotal returns the total number of open (ip, port) pairs found
+// across all hosts. Used by the adaptive tuner to measure how many new
+// results each scan round produced (retransmission gain).
+func (r *Result) GetOpenPortTotal() int {
+	r.RLock()
+	defer r.RUnlock()
+
+	total := 0
+	for _, ports := range r.ipPorts {
+		total += len(ports)
+	}
+	return total
+}
+
 // GetHostCountForPort returns the number of unique hosts that have a
 // specific port open. Uses a single RLock, safe during concurrent writes.
 func (r *Result) GetHostCountForPort(portNum int) int {

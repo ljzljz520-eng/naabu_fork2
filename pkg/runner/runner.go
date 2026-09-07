@@ -55,6 +55,7 @@ type Runner struct {
 	stats          *clistats.Statistics
 	streamChannel  chan Target
 	excludedIpsNP  *networkpolicy.NetworkPolicy
+	tuner          *AdaptiveTuner
 
 	unique gcache.Cache[string, struct{}]
 }
@@ -354,6 +355,19 @@ func (r *Runner) RunEnumeration(pctx context.Context) error {
 	r.wgscan = sizedwaitgroup.New(r.options.Rate)
 	r.limiter = ratelimit.New(context.Background(), uint(r.options.Rate), time.Second)
 
+	// Adaptive mode: collect loss/RTT telemetry and continuously tune
+	// rate/timeout/retries. Only adjusts scan parameters, no evasion.
+	if r.options.Adaptive {
+		probeStats := scan.EnableProbeStats()
+		r.tuner = NewAdaptiveTuner(probeStats, r.limiter, r.options)
+		r.tuner.SetOpenCountFn(func() int { return r.scanner.ScanResults.GetOpenPortTotal() })
+		r.tuner.Start(ctx)
+		defer func() {
+			r.tuner.Stop()
+			r.tuner.Report()
+		}()
+	}
+
 	shouldDiscoverHosts := r.options.shouldDiscoverHosts()
 	shouldUseRawPackets := r.options.shouldUseRawPackets()
 
@@ -571,7 +585,10 @@ func (r *Runner) RunEnumeration(pctx context.Context) error {
 			}
 
 			// Retries are performed regardless of the previous scan results due to network unreliability
-			for currentRetry := 0; currentRetry < r.options.Retries; currentRetry++ {
+			for currentRetry := 0; currentRetry < r.adaptiveRetries(); currentRetry++ {
+				if r.tuner != nil {
+					r.tuner.RoundStart(currentRetry)
+				}
 				if currentRetry < r.options.ResumeCfg.Retry {
 					gologger.Debug().Msgf("Skipping Retry: %d\n", currentRetry)
 					continue
@@ -681,6 +698,10 @@ func (r *Runner) RunEnumeration(pctx context.Context) error {
 					r.options.ResumeCfg.Index = 0
 				}
 				r.options.ResumeCfg.Unlock()
+
+				if r.tuner != nil {
+					r.tuner.RoundEnd(currentRetry)
+				}
 			}
 		}
 
@@ -926,7 +947,9 @@ func (r *Runner) handleHostPort(ctx context.Context, host, payload string, p *po
 		}
 
 		r.limiter.Take()
-		open, err := r.scanner.ConnectPort(host, payload, p, r.options.GetTimeout())
+		scan.RecordConnectSent()
+		open, err := r.scanner.ConnectPort(host, payload, p, r.adaptiveTimeout())
+		scan.RecordConnectResult(open && err == nil, err)
 		if open && err == nil {
 			r.scanner.ScanResults.AddPort(host, p)
 			// ignore OnReceive when verification is enabled
@@ -1257,6 +1280,24 @@ func (r *Runner) handleOutput(scanResults *result.Result) {
 			csvFileHeaderEnabled = false
 		}
 	}
+}
+
+// adaptiveRetries returns the effective number of retry rounds: the
+// tuner's adapted value when adaptive mode is on, otherwise the user value.
+func (r *Runner) adaptiveRetries() int {
+	if r.tuner != nil {
+		return r.tuner.EffectiveRetries()
+	}
+	return r.options.Retries
+}
+
+// adaptiveTimeout returns the effective response timeout: the tuner's
+// adapted value when adaptive mode is on, otherwise the user value.
+func (r *Runner) adaptiveTimeout() time.Duration {
+	if r.tuner != nil {
+		return r.tuner.EffectiveTimeout()
+	}
+	return r.options.GetTimeout()
 }
 
 func ipMatchesIpVersions(ip string, ipVersions ...string) bool {
